@@ -22,6 +22,29 @@ The plugin creates one georeferenced Float32 GeoTIFF per selected index:
 7. Select the indices to calculate.
 8. Run the tool.
 
+## Install in QGIS
+
+### Install from ZIP
+
+1. Open QGIS Desktop.
+2. Go to Plugins > Manage and Install Plugins.
+3. Open the Install from ZIP tab.
+4. Select `plugins_drone_multispectral_images_vegetative_indices.zip`.
+5. Click Install Plugin.
+6. Enable the plugin if QGIS does not enable it automatically.
+
+### Development install
+
+Copy this plugin folder into your QGIS profile plugins folder.
+
+On Windows, the default profile path is usually:
+
+```text
+%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\plugins_drone_multispectral_images_vegetative_indices
+```
+
+Restart QGIS, then enable the plugin from Plugins > Manage and Install Plugins.
+
 ## Band Mapping
 
 Default band mapping is:
