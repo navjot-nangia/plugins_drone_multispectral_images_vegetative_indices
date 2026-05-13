@@ -1,0 +1,19 @@
+[general]
+name=Drone Multispectral Vegetation Indices
+description=Calculate NDVI, NDRE, SAVI, MSAVI, GNDVI, and VARI maps from drone multispectral GeoTIFF rasters.
+about=Creates georeferenced Float32 GeoTIFF vegetation index maps from a loaded drone multispectral raster using user-selected Blue, Green, Red, Red Edge, and NIR band mappings.
+version=0.1.0
+qgisMinimumVersion=3.22
+qgisMaximumVersion=3.99
+author=Navjot Singh
+email=navjotnangia@gmail.com
+homepage=https://github.com/navjot-nangia/plugins_drone_multispectral_images_vegetative_indices
+repository=https://github.com/navjot-nangia/plugins_drone_multispectral_images_vegetative_indices
+tracker=https://github.com/navjot-nangia/plugins_drone_multispectral_images_vegetative_indices/issues
+category=Raster
+tags=NDVI,NDRE,SAVI,MSAVI,GNDVI,VARI,raster,drone,multispectral,vegetation
+license=GPL-2.0-or-later
+experimental=False
+deprecated=False
+server=False
+hasProcessingProvider=False
