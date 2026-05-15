@@ -66,3 +66,5 @@ Outputs are named from the input raster and index, for example:
 - `field_orthomosaic_savi.tif`
 
 Each output keeps the same extent, pixel size, projection, and metadata as the input raster. Invalid pixels and divide-by-zero results are written as the selected NoData value.
+
+Source bands are converted to reflectance units before index calculation. The plugin first honors GDAL band scale/offset metadata and otherwise auto-detects common integer reflectance encodings such as 8-bit, `0..10000`, `0..32768`, and `0..65535`. This keeps indices with additive constants, especially `SAVI` and `MSAVI`, normalized instead of treating scaled integer pixels as unit reflectance.

@@ -31,6 +31,10 @@ INDEX_DEFINITIONS = {
     },
 }
 
+AUTO_REFLECTANCE_MAX = 1.5
+COMMON_REFLECTANCE_DIVISORS = (255.0, 1000.0, 10000.0, 32768.0, 65535.0)
+INTEGER_GDAL_TYPES = {"BYTE", "UINT16", "INT16", "UINT32", "INT32"}
+
 
 class RasterProcessingError(RuntimeError):
     """Raised when vegetation index raster processing cannot be completed."""
@@ -82,6 +86,7 @@ def calculate_indices(
 
     required_band_keys = _required_band_keys(indices)
     source_bands = _read_source_bands(source, band_map, required_band_keys)
+    band_transforms = _source_band_transforms(source_bands, gdal)
     x_size = source.RasterXSize
     y_size = source.RasterYSize
     block_x_size, block_y_size = _block_size(source_bands.values(), x_size, y_size)
@@ -110,6 +115,7 @@ def calculate_indices(
                     cols = min(block_x_size, x_size - x_offset)
                     band_arrays, invalid_mask = _read_band_arrays(
                         source_bands,
+                        band_transforms,
                         INDEX_DEFINITIONS[index_name]["bands"],
                         x_offset,
                         y_offset,
@@ -190,6 +196,86 @@ def _read_source_bands(source, band_map, required_band_keys):
     return source_bands
 
 
+def _source_band_transforms(source_bands, gdal):
+    """Return scale/offset transforms that convert source pixels to reflectance units."""
+    transforms = {}
+    has_explicit_transform = False
+
+    for band_key, band in source_bands.items():
+        scale, offset = _band_scale_offset(band)
+        transforms[band_key] = (scale, offset)
+        has_explicit_transform = has_explicit_transform or not _is_identity_transform(scale, offset)
+
+    if has_explicit_transform:
+        return transforms
+
+    common_scale = _infer_common_reflectance_scale(source_bands, gdal)
+    if _is_identity_transform(common_scale, 0.0):
+        return transforms
+
+    return {band_key: (common_scale, 0.0) for band_key in source_bands}
+
+
+def _band_scale_offset(band):
+    """Return the GDAL band scale and offset, defaulting to an identity transform."""
+    scale = band.GetScale()
+    offset = band.GetOffset()
+    if scale is None:
+        scale = 1.0
+    if offset is None:
+        offset = 0.0
+
+    return float(scale), float(offset)
+
+
+def _is_identity_transform(scale, offset):
+    """Return whether a scale/offset pair leaves pixel values unchanged."""
+    return math.isclose(float(scale), 1.0) and math.isclose(float(offset), 0.0)
+
+
+def _infer_common_reflectance_scale(source_bands, gdal):
+    """Infer a shared scale for uncalibrated integer reflectance rasters."""
+    data_type_names = set()
+    max_values = []
+
+    for band in source_bands.values():
+        data_type_names.add(gdal.GetDataTypeName(band.DataType).upper())
+        max_value = _band_max_value(band)
+        if max_value is not None and math.isfinite(max_value):
+            max_values.append(max_value)
+
+    if not max_values or not data_type_names.intersection(INTEGER_GDAL_TYPES):
+        return 1.0
+
+    max_value = max(max_values)
+    if max_value <= AUTO_REFLECTANCE_MAX:
+        return 1.0
+
+    for divisor in COMMON_REFLECTANCE_DIVISORS:
+        if max_value <= divisor * AUTO_REFLECTANCE_MAX:
+            return 1.0 / divisor
+
+    return 1.0
+
+
+def _band_max_value(band):
+    """Return a band maximum from GDAL statistics, or None if unavailable."""
+    try:
+        statistics = band.GetStatistics(False, True)
+    except Exception:
+        statistics = None
+
+    if statistics and len(statistics) >= 2 and statistics[1] is not None:
+        return float(statistics[1])
+
+    try:
+        _, max_value = band.ComputeRasterMinMax(False)
+    except Exception:
+        return None
+
+    return float(max_value)
+
+
 def _block_size(bands, x_size, y_size):
     """Return a practical processing block size for the source raster."""
     first_band = next(iter(bands))
@@ -226,7 +312,7 @@ def _create_output(gdal, driver, source, output_path, index_name, output_nodata)
     return output
 
 
-def _read_band_arrays(source_bands, required_bands, x_offset, y_offset, cols, rows, np):
+def _read_band_arrays(source_bands, band_transforms, required_bands, x_offset, y_offset, cols, rows, np):
     """Read required spectral bands and build a shared invalid-pixel mask."""
     arrays = {}
     invalid_mask = np.zeros((rows, cols), dtype=bool)
@@ -238,7 +324,6 @@ def _read_band_arrays(source_bands, required_bands, x_offset, y_offset, cols, ro
             raise RasterProcessingError("Unable to read a raster block from the {} band.".format(band_key))
 
         data = data.astype(np.float32, copy=False)
-        arrays[band_key] = data
         invalid_mask |= ~np.isfinite(data)
 
         nodata = band.GetNoDataValue()
@@ -247,6 +332,13 @@ def _read_band_arrays(source_bands, required_bands, x_offset, y_offset, cols, ro
                 invalid_mask |= np.isnan(data)
             else:
                 invalid_mask |= np.isclose(data, float(nodata))
+
+        scale, offset = band_transforms[band_key]
+        if not _is_identity_transform(scale, offset):
+            data = data * scale + offset
+            invalid_mask |= ~np.isfinite(data)
+
+        arrays[band_key] = data
 
     return arrays, invalid_mask
 
