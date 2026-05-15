@@ -277,7 +277,7 @@ def _read_band_arrays(sources, required_bands, x_offset, y_offset, cols, rows, n
             else:
                 invalid_mask |= np.isclose(data, float(nodata))
 
-        scale, offset = band_transforms[band_key]
+        scale, offset = _band_scale_offset(band)
         if not _is_identity_transform(scale, offset):
             data = data * scale + offset
             invalid_mask |= ~np.isfinite(data)
@@ -285,6 +285,25 @@ def _read_band_arrays(sources, required_bands, x_offset, y_offset, cols, rows, n
         arrays[band_key] = data
 
     return arrays, invalid_mask
+
+
+def _band_scale_offset(band):
+    """Return GDAL band scale and offset values with identity defaults."""
+    scale = band.GetScale()
+    offset = band.GetOffset()
+    if scale is None:
+        scale = 1.0
+    if offset is None:
+        offset = 0.0
+
+    return float(scale), float(offset)
+
+
+def _is_identity_transform(scale, offset):
+    """Return whether a scale/offset pair leaves pixel values unchanged."""
+    return math.isclose(scale, 1.0, rel_tol=0.0, abs_tol=1e-12) and math.isclose(
+        offset, 0.0, rel_tol=0.0, abs_tol=1e-12
+    )
 
 
 def _calculate_index(index_name, bands, savi_l, np):
