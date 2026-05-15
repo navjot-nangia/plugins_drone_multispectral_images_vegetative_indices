@@ -70,10 +70,10 @@ class VegetationIndicesPlugin:
         if not _dialog_result(dialog):
             return
 
-        input_path = dialog.input_path()
+        input_paths = dialog.input_paths()
         output_dir = dialog.output_dir()
+        output_prefix = dialog.output_prefix()
         selected_indices = dialog.selected_indices()
-        band_map = dialog.band_map()
         savi_l = dialog.savi_l()
         nodata_value = dialog.nodata_value()
 
@@ -99,10 +99,10 @@ class VegetationIndicesPlugin:
         QApplication.setOverrideCursor(_qt_wait_cursor())
         try:
             outputs = calculate_indices(
-                input_path=input_path,
+                input_paths=input_paths,
                 output_dir=output_dir,
+                output_prefix=output_prefix,
                 indices=selected_indices,
-                band_map=band_map,
                 savi_l=savi_l,
                 output_nodata=nodata_value,
                 progress_callback=update_progress,

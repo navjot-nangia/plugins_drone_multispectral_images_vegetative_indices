@@ -1,6 +1,6 @@
 # Drone Multispectral Vegetation Indices
 
-QGIS plugin for calculating vegetation index maps from a drone multispectral GeoTIFF already loaded as a raster layer.
+QGIS plugin for calculating vegetation index maps from separate Pix4D drone reflectance GeoTIFFs loaded as raster layers.
 
 The plugin creates one georeferenced Float32 GeoTIFF per selected index:
 
@@ -14,11 +14,11 @@ The plugin creates one georeferenced Float32 GeoTIFF per selected index:
 ## Usage
 
 1. Open QGIS and enable the plugin.
-2. Add the multispectral `.tif` or `.tiff` orthomosaic to QGIS as a raster layer.
+2. Add the Pix4D Blue, Green, Red, Red Edge, and NIR reflectance `.tif` or `.tiff` maps to QGIS as raster layers.
 3. Go to Raster > Drone Vegetation Indices > Calculate Vegetation Index Maps.
-4. Select the loaded multispectral layer.
+4. Select the loaded reflectance layer for each band.
 5. Set the output folder.
-6. Confirm the band mapping for Blue, Green, Red, Red Edge, and NIR.
+6. Set the output filename prefix.
 7. Select the indices to calculate.
 8. Run the tool.
 
@@ -45,26 +45,24 @@ On Windows, the default profile path is usually:
 
 Restart QGIS, then enable the plugin from Plugins > Manage and Install Plugins.
 
-## Band Mapping
+## Reflectance Map Inputs
 
-Default band mapping is:
+The plugin expects separate single-band reflectance maps, such as Pix4D outputs named like:
 
-- Blue: band 1
-- Green: band 2
-- Red: band 3
-- Red Edge: band 4
-- NIR: band 5
+- `*_blue.tif`
+- `*_green.tif`
+- `*_red.tif`
+- `*_red_edge.tif`
+- `*_nir.tif`
 
-Change these values to match the band order in your drone orthomosaic.
+It reads band 1 from each selected raster. The rasters must have the same pixel size, row/column count, geotransform, and projection.
 
 ## Output
 
-Outputs are named from the input raster and index, for example:
+Outputs are named from the output prefix and index, for example:
 
 - `field_orthomosaic_ndvi.tif`
 - `field_orthomosaic_ndre.tif`
 - `field_orthomosaic_savi.tif`
 
-Each output keeps the same extent, pixel size, projection, and metadata as the input raster. Invalid pixels and divide-by-zero results are written as the selected NoData value.
-
-Source bands are converted to reflectance units before index calculation. The plugin first honors GDAL band scale/offset metadata and otherwise auto-detects common integer reflectance encodings such as 8-bit, `0..10000`, `0..32768`, and `0..65535`. This keeps indices with additive constants, especially `SAVI` and `MSAVI`, normalized instead of treating scaled integer pixels as unit reflectance.
+Each output keeps the same extent, pixel size, projection, and metadata as the selected reflectance rasters. Invalid pixels and divide-by-zero results are written as the selected NoData value.

@@ -56,10 +56,10 @@ def _load_raster_dependencies():
 
 
 def calculate_indices(
-    input_path,
+    input_paths,
     output_dir,
+    output_prefix,
     indices,
-    band_map,
     savi_l=0.5,
     output_nodata=-9999.0,
     progress_callback=None,
@@ -68,44 +68,43 @@ def calculate_indices(
     gdal, np = _load_raster_dependencies()
     gdal.UseExceptions()
 
-    source = gdal.Open(input_path, gdal.GA_ReadOnly)
-    if source is None:
-        raise RasterProcessingError("Unable to open the input raster.")
-
-    if source.RasterCount < 1:
-        raise RasterProcessingError("The input raster does not contain any bands.")
-
-    _validate_indices(indices, band_map, source.RasterCount)
+    _validate_indices(indices, input_paths)
     output_dir = os.path.abspath(output_dir)
     if not os.path.isdir(output_dir):
-        raise RasterProcessingError("The output folder does not exist.")
+        os.makedirs(output_dir)
 
     driver = gdal.GetDriverByName("GTiff")
     if driver is None:
         raise RasterProcessingError("The GDAL GeoTIFF driver is not available.")
 
     required_band_keys = _required_band_keys(indices)
-    source_bands = _read_source_bands(source, band_map, required_band_keys)
-    band_transforms = _source_band_transforms(source_bands, gdal)
-    x_size = source.RasterXSize
-    y_size = source.RasterYSize
-    block_x_size, block_y_size = _block_size(source_bands.values(), x_size, y_size)
+    sources = _open_sources(gdal, input_paths, required_band_keys)
+    reference_source = sources[required_band_keys[0]]["dataset"]
+    _validate_source_alignment(sources, required_band_keys)
+
+    x_size = reference_source.RasterXSize
+    y_size = reference_source.RasterYSize
+    block_x_size, block_y_size = _block_size(
+        [sources[band_key]["band"] for band_key in required_band_keys],
+        x_size,
+        y_size,
+    )
     total_blocks = int(math.ceil(x_size / block_x_size)) * int(math.ceil(y_size / block_y_size))
     total_work = total_blocks * len(indices)
     work_done = 0
 
     outputs = {}
     created_paths = []
-
     output = None
+
     try:
         for index_name in indices:
-            output_path = _output_path(input_path, output_dir, index_name)
+            output_path = _output_path(output_dir, output_prefix, index_name)
             outputs[index_name] = output_path
             if os.path.exists(output_path):
                 driver.Delete(output_path)
 
-            output = _create_output(gdal, driver, source, output_path, index_name, output_nodata)
+            output = _create_output(gdal, driver, reference_source, output_path, index_name, output_nodata)
             output_band = output.GetRasterBand(1)
             created_paths.append(output_path)
 
@@ -114,8 +113,7 @@ def calculate_indices(
                 for x_offset in range(0, x_size, block_x_size):
                     cols = min(block_x_size, x_size - x_offset)
                     band_arrays, invalid_mask = _read_band_arrays(
-                        source_bands,
-                        band_transforms,
+                        sources,
                         INDEX_DEFINITIONS[index_name]["bands"],
                         x_offset,
                         y_offset,
@@ -137,19 +135,19 @@ def calculate_indices(
 
     except Exception:
         output = None
-        source = None
         for output_path in created_paths:
             if os.path.exists(output_path):
                 driver.Delete(output_path)
         raise
     finally:
-        source = None
+        for source in sources.values():
+            source["dataset"] = None
 
     return outputs
 
 
-def _validate_indices(indices, band_map, raster_band_count):
-    """Validate requested indices and one-based band mapping."""
+def _validate_indices(indices, input_paths):
+    """Validate requested indices and input path mapping."""
     if not indices:
         raise RasterProcessingError("Select at least one vegetation index.")
 
@@ -158,18 +156,11 @@ def _validate_indices(indices, band_map, raster_band_count):
             raise RasterProcessingError("Unsupported vegetation index: {}".format(index_name))
 
         for band_key in INDEX_DEFINITIONS[index_name]["bands"]:
-            band_number = band_map.get(band_key)
-            if band_number is None:
-                raise RasterProcessingError("Missing band mapping for {}.".format(band_key))
-            if band_number < 1 or band_number > raster_band_count:
-                raise RasterProcessingError(
-                    "{} needs {} band {}, but the raster has {} band(s).".format(
-                        index_name,
-                        band_key,
-                        band_number,
-                        raster_band_count,
-                    )
-                )
+            input_path = input_paths.get(band_key, "")
+            if not input_path:
+                raise RasterProcessingError("Missing {} reflectance raster.".format(band_key))
+            if not os.path.isfile(input_path):
+                raise RasterProcessingError("The {} reflectance raster does not exist.".format(band_key))
 
 
 def _required_band_keys(indices):
@@ -183,101 +174,54 @@ def _required_band_keys(indices):
     return required
 
 
-def _read_source_bands(source, band_map, required_band_keys):
-    """Return GDAL band objects keyed by spectral band name."""
-    source_bands = {}
+def _open_sources(gdal, input_paths, required_band_keys):
+    """Open required single-band reflectance rasters."""
+    sources = {}
     for band_key in required_band_keys:
-        band_number = band_map[band_key]
-        band = source.GetRasterBand(int(band_number))
-        if band is None:
-            raise RasterProcessingError("Unable to read raster band {} for {}.".format(band_number, band_key))
-        source_bands[band_key] = band
+        dataset = gdal.Open(input_paths[band_key], gdal.GA_ReadOnly)
+        if dataset is None:
+            raise RasterProcessingError("Unable to open the {} reflectance raster.".format(band_key))
 
-    return source_bands
+        if dataset.RasterCount < 1:
+            raise RasterProcessingError("The {} reflectance raster does not contain any bands.".format(band_key))
 
+        sources[band_key] = {
+            "dataset": dataset,
+            "band": dataset.GetRasterBand(1),
+            "path": input_paths[band_key],
+        }
 
-def _source_band_transforms(source_bands, gdal):
-    """Return scale/offset transforms that convert source pixels to reflectance units."""
-    transforms = {}
-    has_explicit_transform = False
-
-    for band_key, band in source_bands.items():
-        scale, offset = _band_scale_offset(band)
-        transforms[band_key] = (scale, offset)
-        has_explicit_transform = has_explicit_transform or not _is_identity_transform(scale, offset)
-
-    if has_explicit_transform:
-        return transforms
-
-    common_scale = _infer_common_reflectance_scale(source_bands, gdal)
-    if _is_identity_transform(common_scale, 0.0):
-        return transforms
-
-    return {band_key: (common_scale, 0.0) for band_key in source_bands}
+    return sources
 
 
-def _band_scale_offset(band):
-    """Return the GDAL band scale and offset, defaulting to an identity transform."""
-    scale = band.GetScale()
-    offset = band.GetOffset()
-    if scale is None:
-        scale = 1.0
-    if offset is None:
-        offset = 0.0
+def _validate_source_alignment(sources, required_band_keys):
+    """Ensure all required reflectance maps share the same grid and projection."""
+    reference = sources[required_band_keys[0]]["dataset"]
+    reference_projection = reference.GetProjection()
+    reference_transform = reference.GetGeoTransform()
+    reference_size = (reference.RasterXSize, reference.RasterYSize)
 
-    return float(scale), float(offset)
+    for band_key in required_band_keys[1:]:
+        dataset = sources[band_key]["dataset"]
+        size = (dataset.RasterXSize, dataset.RasterYSize)
+        if size != reference_size:
+            raise RasterProcessingError(
+                "The {} reflectance raster size does not match the other selected rasters.".format(band_key)
+            )
 
+        if dataset.GetGeoTransform() != reference_transform:
+            raise RasterProcessingError(
+                "The {} reflectance raster geotransform does not match the other selected rasters.".format(band_key)
+            )
 
-def _is_identity_transform(scale, offset):
-    """Return whether a scale/offset pair leaves pixel values unchanged."""
-    return math.isclose(float(scale), 1.0) and math.isclose(float(offset), 0.0)
-
-
-def _infer_common_reflectance_scale(source_bands, gdal):
-    """Infer a shared scale for uncalibrated integer reflectance rasters."""
-    data_type_names = set()
-    max_values = []
-
-    for band in source_bands.values():
-        data_type_names.add(gdal.GetDataTypeName(band.DataType).upper())
-        max_value = _band_max_value(band)
-        if max_value is not None and math.isfinite(max_value):
-            max_values.append(max_value)
-
-    if not max_values or not data_type_names.intersection(INTEGER_GDAL_TYPES):
-        return 1.0
-
-    max_value = max(max_values)
-    if max_value <= AUTO_REFLECTANCE_MAX:
-        return 1.0
-
-    for divisor in COMMON_REFLECTANCE_DIVISORS:
-        if max_value <= divisor * AUTO_REFLECTANCE_MAX:
-            return 1.0 / divisor
-
-    return 1.0
-
-
-def _band_max_value(band):
-    """Return a band maximum from GDAL statistics, or None if unavailable."""
-    try:
-        statistics = band.GetStatistics(False, True)
-    except Exception:
-        statistics = None
-
-    if statistics and len(statistics) >= 2 and statistics[1] is not None:
-        return float(statistics[1])
-
-    try:
-        _, max_value = band.ComputeRasterMinMax(False)
-    except Exception:
-        return None
-
-    return float(max_value)
+        if dataset.GetProjection() != reference_projection:
+            raise RasterProcessingError(
+                "The {} reflectance raster projection does not match the other selected rasters.".format(band_key)
+            )
 
 
 def _block_size(bands, x_size, y_size):
-    """Return a practical processing block size for the source raster."""
+    """Return a practical processing block size for the source rasters."""
     first_band = next(iter(bands))
     block_x_size, block_y_size = first_band.GetBlockSize()
     if block_x_size <= 0:
@@ -288,12 +232,12 @@ def _block_size(bands, x_size, y_size):
     return block_x_size, block_y_size
 
 
-def _create_output(gdal, driver, source, output_path, index_name, output_nodata):
+def _create_output(gdal, driver, reference_source, output_path, index_name, output_nodata):
     """Create a georeferenced single-band Float32 GeoTIFF for an index."""
     output = driver.Create(
         output_path,
-        source.RasterXSize,
-        source.RasterYSize,
+        reference_source.RasterXSize,
+        reference_source.RasterYSize,
         1,
         gdal.GDT_Float32,
         options=["TILED=YES", "COMPRESS=LZW", "BIGTIFF=IF_SAFER"],
@@ -301,9 +245,9 @@ def _create_output(gdal, driver, source, output_path, index_name, output_nodata)
     if output is None:
         raise RasterProcessingError("Unable to create the {} output raster.".format(index_name))
 
-    output.SetGeoTransform(source.GetGeoTransform())
-    output.SetProjection(source.GetProjection())
-    output.SetMetadata(source.GetMetadata())
+    output.SetGeoTransform(reference_source.GetGeoTransform())
+    output.SetProjection(reference_source.GetProjection())
+    output.SetMetadata(reference_source.GetMetadata())
 
     output_band = output.GetRasterBand(1)
     output_band.SetNoDataValue(float(output_nodata))
@@ -312,13 +256,13 @@ def _create_output(gdal, driver, source, output_path, index_name, output_nodata)
     return output
 
 
-def _read_band_arrays(source_bands, band_transforms, required_bands, x_offset, y_offset, cols, rows, np):
+def _read_band_arrays(sources, required_bands, x_offset, y_offset, cols, rows, np):
     """Read required spectral bands and build a shared invalid-pixel mask."""
     arrays = {}
     invalid_mask = np.zeros((rows, cols), dtype=bool)
 
     for band_key in required_bands:
-        band = source_bands[band_key]
+        band = sources[band_key]["band"]
         data = band.ReadAsArray(x_offset, y_offset, cols, rows)
         if data is None:
             raise RasterProcessingError("Unable to read a raster block from the {} band.".format(band_key))
@@ -373,7 +317,6 @@ def _safe_divide(numerator, denominator, np):
     return result
 
 
-def _output_path(input_path, output_dir, index_name):
+def _output_path(output_dir, output_prefix, index_name):
     """Return the GeoTIFF output path for a selected index."""
-    base_name = os.path.splitext(os.path.basename(input_path))[0]
-    return os.path.join(output_dir, "{}_{}.tif".format(base_name, index_name.lower()))
+    return os.path.join(output_dir, "{}_{}.tif".format(output_prefix, index_name.lower()))
