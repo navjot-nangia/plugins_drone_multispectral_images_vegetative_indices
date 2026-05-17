@@ -25,10 +25,6 @@ INDEX_DEFINITIONS = {
         "bands": ("nir", "green"),
         "description": "Green Normalized Difference Vegetation Index",
     },
-    "VARI": {
-        "bands": ("green", "red", "blue"),
-        "description": "Visible Atmospherically Resistant Index",
-    },
 }
 
 AUTO_REFLECTANCE_MAX = 1.5
@@ -323,8 +319,6 @@ def _calculate_index(index_name, bands, savi_l, np):
             return (2.0 * bands["nir"] + 1.0 - np.sqrt(term)) / 2.0
         if index_name == "GNDVI":
             return _safe_divide(bands["nir"] - bands["green"], bands["nir"] + bands["green"], np)
-        if index_name == "VARI":
-            return _safe_divide(bands["green"] - bands["red"], bands["green"] + bands["red"] - bands["blue"], np)
 
     raise RasterProcessingError("Unsupported vegetation index: {}".format(index_name))
 

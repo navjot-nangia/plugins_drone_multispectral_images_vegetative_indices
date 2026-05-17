@@ -9,7 +9,6 @@ The plugin creates one georeferenced Float32 GeoTIFF per selected index:
 - `SAVI`: `((NIR - Red) / (NIR + Red + L)) * (1 + L)`
 - `MSAVI`: `(2 * NIR + 1 - sqrt((2 * NIR + 1)^2 - 8 * (NIR - Red))) / 2`
 - `GNDVI`: `(NIR - Green) / (NIR + Green)`
-- `VARI`: `(Green - Red) / (Green + Red - Blue)`
 
 ## Usage
 
